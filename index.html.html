@@ -1,0 +1,590 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>FRELDI BTC Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700;800&display=swap">
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script>
+  tailwind.config = {
+    theme: { extend: {
+      fontFamily: { sans: ['"IBM Plex Sans"', 'system-ui', 'sans-serif'], mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'] }
+    } }
+  };
+</script>
+<style>
+  /* Layout: barra superior fija · columna izquierda con el medidor · cuadrícula 3x2 de componentes · fila inferior con gráfico y fuentes */
+  :root {
+    color-scheme: dark;
+    --bg: #07090c;
+    --panel: #0c1016;
+    --panel-2: #10151d;
+    --line: #1c2430;
+    --line-2: #273141;
+    --fg: #e7edf4;
+    --muted: #7c8899;
+    --dim: #4e5a6a;
+    --btc: #f7931a;
+    --good: #18e38a;
+    --warn: #f5c518;
+    --bad: #ff4d5e;
+    --c-f: #ffd23f; --c-r: #ff9f1c; --c-e: #2fd3ff; --c-d: #22e39a; --c-i: #d94fff; --c-l: #ff4f6d;
+    --font-ui: "IBM Plex Sans", system-ui, sans-serif;
+    --font-num: "JetBrains Mono", ui-monospace, monospace;
+  }
+  html, body { background: var(--bg); color: var(--fg); }
+  body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; }
+  .num { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+  .tile { background: #080b10; border: 1px solid var(--line-2); border-radius: 10px; transition: border-color .2s, transform .2s; }
+  .tile:hover { border-color: #3a4658; }
+  .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .muted { color: var(--muted); }
+  .dim { color: var(--dim); }
+  .gutter { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: rgba(7,9,12,.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+  body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--bg); }
+  .bar-track { height: 6px; background: #1a212c; border-radius: 99px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 99px; transition: width .8s cubic-bezier(.2,.8,.2,1), background-color .4s; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; border-radius: 99px; padding: 3px 10px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .dot { width: 8px; height: 8px; border-radius: 99px; background: currentColor; flex: none; }
+  .pulse { animation: pulse 1.6s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 currentColor; } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+  .spin { animation: spin .9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--fg); border-radius: 8px; padding: 6px 12px; font-size: 13px; font-weight: 600; cursor: pointer; transition: border-color .2s, background .2s; }
+  .btn:hover { border-color: var(--btc); }
+  .btn:focus-visible, .tile:focus-visible { outline: 2px solid var(--btc); outline-offset: 2px; }
+  .btn[disabled] { opacity: .55; cursor: wait; }
+  .glow-num { text-shadow: 0 0 18px var(--zone, var(--good)), 0 0 42px color-mix(in srgb, var(--zone, var(--good)) 45%, transparent); }
+  .letter { font-family: var(--font-num); font-weight: 800; font-size: 30px; line-height: 1; }
+  .src-badge { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; border-radius: 4px; padding: 1px 6px; }
+  .src-live { color: var(--good); background: color-mix(in srgb, var(--good) 14%, transparent); }
+  .src-cache { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+  .src-fallback { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
+  .scale-grad { background: linear-gradient(90deg, var(--bad) 0%, #ff8a3d 25%, var(--warn) 50%, #8fe35a 75%, var(--good) 100%); }
+  .marker { position: absolute; top: -4px; width: 4px; height: 14px; background: #fff; border-radius: 2px; transform: translateX(-50%); box-shadow: 0 0 10px #fff; transition: left .9s cubic-bezier(.2,.8,.2,1); }
+  .flash { animation: flash .9s ease-out; }
+  @keyframes flash { from { background-color: color-mix(in srgb, var(--btc) 18%, transparent); } to { background-color: transparent; } }
+  table.src td, table.src th { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+  table.src th { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+</style>
+
+<header class="top">
+  <div class="gutter py-3 flex flex-wrap items-center gap-x-5 gap-y-2">
+    <div class="flex items-center gap-2.5">
+      <div class="w-8 h-8 rounded-lg grid place-items-center font-bold text-black" style="background:var(--btc)">₿</div>
+      <div class="font-bold text-[17px] tracking-tight">BTC <span style="color:var(--btc)">FRELDI</span> Monitor</div>
+    </div>
+    <div class="flex items-center gap-3 flex-wrap">
+      <div class="num text-xl font-bold" style="color:var(--btc)" id="price">₿ —</div>
+      <span class="pill num" id="chg24" style="color:var(--good);background:color-mix(in srgb,var(--good) 12%,transparent)">+0.00%</span>
+      <span class="pill" id="session" style="color:#c9b8ff;background:#1b1830;border:1px solid #3a3266">🏛 Sesión —</span>
+    </div>
+    <div class="ml-auto flex items-center gap-3 flex-wrap">
+      <span class="pill" id="liveState" style="color:var(--warn);background:color-mix(in srgb,var(--warn) 12%,transparent)"><span class="dot"></span><span id="liveText">Sincronizando…</span></span>
+      <span class="text-xs muted num">Próxima: <span id="countdown">30</span>s</span>
+      <span class="text-xs muted num">Act: <span id="lastUpd">--:--:--</span></span>
+      <button class="btn" id="refreshBtn" type="button" aria-label="Actualizar ahora">
+        <svg id="refreshIcon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+        Actualizar
+      </button>
+    </div>
+  </div>
+</header>
+
+<main class="gutter py-5 max-w-[1400px] mx-auto flex flex-col gap-4">
+  <div id="sandboxNote" class="panel px-4 py-3 text-sm" style="border-color:color-mix(in srgb,var(--warn) 40%,var(--line));" hidden>
+    <span style="color:var(--warn);font-weight:600">Modo respaldo.</span>
+    <span class="muted">Este entorno bloquea las conexiones a las APIs externas, así que se muestran valores de respaldo. Descarga el archivo HTML y ábrelo en tu navegador para recibir datos en vivo cada 30 segundos.</span>
+  </div>
+
+  <div class="grid gap-4 lg:grid-cols-[minmax(300px,380px)_1fr]">
+    <!-- Índice global -->
+    <section class="panel p-5 flex flex-col gap-4 min-w-0" aria-labelledby="idxTitle">
+      <div class="eyebrow" id="idxTitle">📊 Índice FRELDI</div>
+      <div class="relative mx-auto w-full max-w-[300px]">
+        <svg viewBox="0 0 240 140" class="w-full" role="img" aria-label="Medidor del índice FRELDI">
+          <defs>
+            <linearGradient id="arcGrad" x1="0" x2="1" y1="0" y2="0">
+              <stop offset="0" stop-color="#ff4d5e"/><stop offset=".5" stop-color="#f5c518"/><stop offset="1" stop-color="#18e38a"/>
+            </linearGradient>
+            <filter id="neon" x="-30%" y="-30%" width="160%" height="160%">
+              <feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+            </filter>
+          </defs>
+          <path d="M20 125 A100 100 0 0 1 220 125" fill="none" stroke="#1a212c" stroke-width="14" stroke-linecap="round"/>
+          <path id="arcFill" d="M20 125 A100 100 0 0 1 220 125" fill="none" stroke="url(#arcGrad)" stroke-width="14" stroke-linecap="round" filter="url(#neon)" pathLength="100" stroke-dasharray="0 100" style="transition:stroke-dasharray 1s cubic-bezier(.2,.8,.2,1)"/>
+          <circle id="arcKnob" r="7" cx="20" cy="125" fill="#fff" filter="url(#neon)" style="transition:cx 1s, cy 1s"/>
+        </svg>
+        <div class="absolute inset-x-0 bottom-0 flex flex-col items-center">
+          <div class="num font-extrabold leading-none glow-num" id="idxNum" style="font-size:64px;color:var(--good)">—</div>
+          <div class="text-sm dim num">/100</div>
+        </div>
+      </div>
+      <div class="flex items-center justify-center gap-2 text-lg font-bold tracking-wide" id="zoneLbl" style="color:var(--good)">
+        <span class="dot pulse" style="width:12px;height:12px"></span><span id="zoneText">CALCULANDO…</span>
+      </div>
+      <div class="flex flex-col gap-1.5">
+        <div class="relative h-[6px] rounded-full scale-grad">
+          <div class="marker" id="scaleMarker" style="left:50%"></div>
+        </div>
+        <div class="flex justify-between text-[11px] dim num">
+          <span>0<br><span class="font-sans">Techo</span></span><span>25</span><span class="text-center">50<br><span class="font-sans">Neutral</span></span><span>75</span><span class="text-right">100<br><span class="font-sans">Suelo</span></span>
+        </div>
+      </div>
+      <p class="text-sm muted leading-relaxed" id="zoneDesc">Esperando la primera sincronización de las seis fuentes.</p>
+      <div class="flex items-center justify-between text-xs dim border-t pt-3" style="border-color:var(--line)">
+        <span>Última señal: <span class="num" id="signalTime">—</span></span>
+        <span>Fuentes en vivo: <span class="num" id="liveCount">0/6</span></span>
+      </div>
+    </section>
+
+    <!-- Componentes -->
+    <section class="panel p-5 flex flex-col gap-4 min-w-0" aria-labelledby="compTitle">
+      <div class="flex items-center justify-between gap-3 flex-wrap">
+        <div class="eyebrow" id="compTitle">🧩 Componentes FRELDI</div>
+        <div class="text-xs dim">Puntaje 0–10 · mayor = más zona de acumulación</div>
+      </div>
+      <div class="grid gap-3 grid-cols-1 min-[440px]:grid-cols-2 xl:grid-cols-3" id="cards"></div>
+    </section>
+  </div>
+
+  <div class="grid gap-4 lg:grid-cols-[1fr_minmax(320px,460px)]">
+    <section class="panel p-5 flex flex-col gap-3 min-w-0" aria-labelledby="chartTitle">
+      <div class="flex items-center justify-between gap-3 flex-wrap">
+        <div class="eyebrow" id="chartTitle">📈 BTC vs EMA 200 diaria · 180 días</div>
+        <div class="flex items-center gap-4 text-xs muted">
+          <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-[2px]" style="background:var(--btc)"></span>Cierre</span>
+          <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-[2px]" style="background:var(--c-e)"></span>EMA 200</span>
+        </div>
+      </div>
+      <div class="relative w-full" style="aspect-ratio: 16/6; max-width:100%">
+        <svg id="chart" viewBox="0 0 800 300" preserveAspectRatio="none" class="absolute inset-0 w-full h-full"></svg>
+        <div class="absolute right-1 top-0 text-[11px] num dim" id="chartMax"></div>
+        <div class="absolute right-1 bottom-0 text-[11px] num dim" id="chartMin"></div>
+      </div>
+    </section>
+
+    <section class="panel p-5 flex flex-col gap-3 min-w-0" aria-labelledby="srcTitle">
+      <div class="eyebrow" id="srcTitle">🔌 Estado de fuentes</div>
+      <div class="overflow-x-auto">
+        <table class="src w-full text-[13px]">
+          <thead><tr><th>Var</th><th>Proveedor</th><th>Estado</th><th class="text-right">ms</th></tr></thead>
+          <tbody id="srcBody"></tbody>
+        </table>
+      </div>
+      <p class="text-xs dim leading-relaxed">Vivo = dato recibido en este ciclo. Caché = último valor válido guardado en tu navegador. Respaldo = valor estimado fijo para que ninguna métrica quede vacía.</p>
+    </section>
+  </div>
+
+  <p class="text-xs dim text-center pb-4">Herramienta informativa. No es asesoría financiera.</p>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const SYNC_MS = 30000;
+  const CACHE_KEY = 'freldi_cache_v1';
+
+  // Pesos del índice global (suman 100)
+  const META = {
+    F: { name: 'Fear & Greed', color: 'var(--c-f)', w: 20 },
+    R: { name: 'RSI Diario', color: 'var(--c-r)', w: 15 },
+    E: { name: 'EMA 200', color: 'var(--c-e)', w: 20 },
+    D: { name: 'Dollar DXY', color: 'var(--c-d)', w: 10 },
+    I: { name: 'Interés Abierto', color: 'var(--c-i)', w: 15 },
+    L: { name: 'Liquidez', color: 'var(--c-l)', w: 20 },
+  };
+
+  // Valores de respaldo: nunca 0 ni N/A
+  const FALLBACK = {
+    F: { fg: 50, avg7: 50, cls: 'Neutral' },
+    R: { rsi: 50 },
+    E: { price: 0, ema: 0, dev: 0 },
+    D: { dxy: 103.5, chg30: null },
+    I: { oi: 0, oiUsd: 0, chg30: 0 },
+    L: { total: 0, chg7: 0, chg30: 0 },
+    P: { price: 0, chg24: 0 },
+  };
+
+  const state = { data: {}, src: {}, ms: {}, provider: {}, closes: [], emaArr: [], syncing: false, next: Date.now() + SYNC_MS };
+
+  /* ---------- utilidades ---------- */
+  const $ = (id) => document.getElementById(id);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const fmt = (n, d = 2) => Number(n).toLocaleString('es-EC', { minimumFractionDigits: d, maximumFractionDigits: d });
+  const fmtUsd = (n) => '$' + Number(n).toLocaleString('es-EC', { maximumFractionDigits: 0 });
+  const big = (n) => n >= 1e12 ? (n / 1e12).toFixed(2) + ' T' : n >= 1e9 ? (n / 1e9).toFixed(1) + ' B' : n >= 1e6 ? (n / 1e6).toFixed(1) + ' M' : n >= 1e3 ? (n / 1e3).toFixed(1) + ' K' : n.toFixed(0);
+  const sign = (n, d = 1) => (n >= 0 ? '+' : '') + n.toFixed(d) + '%';
+
+  function loadCache() { try { return JSON.parse(localStorage.getItem(CACHE_KEY)) || {}; } catch { return {}; } }
+  function saveCache(c) { try { localStorage.setItem(CACHE_KEY, JSON.stringify(c)); } catch {} }
+  let cache = loadCache();
+
+  async function getJSON(url, ms = 9000) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), ms);
+    try {
+      const r = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return await r.json();
+    } finally { clearTimeout(t); }
+  }
+
+  // Prueba proveedores en orden; luego caché; luego respaldo fijo.
+  async function resolve(key, attempts) {
+    const t0 = performance.now();
+    for (const [provider, fn] of attempts) {
+      try {
+        const v = await fn();
+        if (v == null) throw new Error('vacío');
+        state.ms[key] = Math.round(performance.now() - t0);
+        state.src[key] = 'live'; state.provider[key] = provider;
+        cache[key] = { v, provider, t: Date.now() };
+        return v;
+      } catch (e) { /* siguiente proveedor */ }
+    }
+    state.ms[key] = Math.round(performance.now() - t0);
+    if (cache[key]) { state.src[key] = 'cache'; state.provider[key] = cache[key].provider; return cache[key].v; }
+    state.src[key] = 'fallback'; state.provider[key] = 'Valor estimado';
+    return FALLBACK[key];
+  }
+
+  /* ---------- cálculos ---------- */
+  function rsiWilder(c, p = 14) {
+    if (c.length < p + 2) return null;
+    let g = 0, l = 0;
+    for (let i = 1; i <= p; i++) { const d = c[i] - c[i - 1]; if (d > 0) g += d; else l -= d; }
+    g /= p; l /= p;
+    for (let i = p + 1; i < c.length; i++) {
+      const d = c[i] - c[i - 1];
+      g = (g * (p - 1) + Math.max(d, 0)) / p;
+      l = (l * (p - 1) + Math.max(-d, 0)) / p;
+    }
+    return l === 0 ? 100 : 100 - 100 / (1 + g / l);
+  }
+  function emaSeries(c, p = 200) {
+    if (c.length < p) return [];
+    const k = 2 / (p + 1);
+    let e = c.slice(0, p).reduce((a, b) => a + b, 0) / p;
+    const out = new Array(p - 1).fill(null); out.push(e);
+    for (let i = p; i < c.length; i++) { e = c[i] * k + e * (1 - k); out.push(e); }
+    return out;
+  }
+
+  /* ---------- puntajes 0–10 (10 = acumulación) ---------- */
+  const SCORE = {
+    F: d => d.fg <= 15 ? 10 : d.fg <= 25 ? 9 : d.fg <= 35 ? 8 : d.fg <= 45 ? 6 : d.fg <= 55 ? 5 : d.fg <= 65 ? 4 : d.fg <= 75 ? 3 : d.fg <= 85 ? 2 : 1,
+    R: d => d.rsi <= 25 ? 10 : d.rsi <= 30 ? 9 : d.rsi <= 35 ? 8 : d.rsi <= 40 ? 7 : d.rsi <= 45 ? 6 : d.rsi <= 55 ? 5 : d.rsi <= 60 ? 4 : d.rsi <= 65 ? 3 : d.rsi <= 70 ? 2 : 1,
+    E: d => Math.round(clamp(5 - d.dev / 4, 0, 10)),                       // -20% bajo la EMA = 10
+    D: d => Math.round(clamp((109 - d.dxy) / 1.6 + (d.chg30 != null ? -d.chg30 * 0.8 : 0), 0, 10)), // dólar débil = mejor
+    I: d => Math.round(clamp(5 - d.chg30 / 3, 0, 10)),                      // desapalancamiento = mejor
+    L: d => Math.round(clamp(5 + d.chg30 * 2 + d.chg7 * 1.5, 0, 10)),        // más stablecoins = mejor
+  };
+  const DETAIL = {
+    F: d => `FG actual: ${d.fg} (${d.cls}) | 7d avg: ${fmt(d.avg7, 1)}`,
+    R: d => `RSI 14d: ${fmt(d.rsi, 1)}`,
+    E: d => d.ema ? `EMA200d: ${fmtUsd(d.ema)} (${sign(d.dev)})` : 'EMA200d: sin velas (neutral)',
+    D: d => `DXY: ${fmt(d.dxy, 2)}${d.chg30 != null ? ' | 1m: ' + sign(d.chg30, 2) : ''}`,
+    I: d => d.oi ? `OI: ${big(d.oi)} BTC (${'$' + big(d.oiUsd)}) | 30d: ${sign(d.chg30)}` : `OI 30d: ${sign(d.chg30)} (estimado)`,
+    L: d => d.total ? `Stables: $${big(d.total)} | 7d ${sign(d.chg7, 2)} | 30d ${sign(d.chg30, 2)}` : 'Stables: variación 0% (estimado)',
+  };
+
+  /* ---------- fuentes ---------- */
+  async function fetchKlines() {
+    return resolve('K', [
+      ['Binance Spot', async () => {
+        const k = await getJSON('https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=1000');
+        return k.map(x => +x[4]);
+      }],
+      ['Binance Spot', async () => {
+        const k = await getJSON('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=1000');
+        return k.map(x => +x[4]);
+      }],
+      ['CoinGecko', async () => {
+        const j = await getJSON('https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=365&interval=daily');
+        return j.prices.map(p => p[1]);
+      }],
+    ]);
+  }
+
+  async function fetchTicker() {
+    return resolve('P', [
+      ['Binance Spot', async () => {
+        const t = await getJSON('https://data-api.binance.vision/api/v3/ticker/24hr?symbol=BTCUSDT');
+        return { price: +t.lastPrice, chg24: +t.priceChangePercent };
+      }],
+      ['Binance Spot', async () => {
+        const t = await getJSON('https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT');
+        return { price: +t.lastPrice, chg24: +t.priceChangePercent };
+      }],
+    ]);
+  }
+
+  const fetchF = () => resolve('F', [
+    ['Alternative.me', async () => {
+      const j = await getJSON('https://api.alternative.me/fng/?limit=7');
+      const vals = j.data.map(x => +x.value);
+      return { fg: vals[0], avg7: vals.reduce((a, b) => a + b, 0) / vals.length, cls: traduceFG(j.data[0].value_classification) };
+    }],
+  ]);
+  function traduceFG(c) {
+    return ({ 'Extreme Fear': 'Miedo extremo', 'Fear': 'Miedo', 'Neutral': 'Neutral', 'Greed': 'Codicia', 'Extreme Greed': 'Codicia extrema' })[c] || c;
+  }
+
+  function parseYahoo(j) {
+    const r = j.chart.result[0];
+    const closes = r.indicators.quote[0].close.filter(v => v != null);
+    const last = r.meta.regularMarketPrice || closes[closes.length - 1];
+    const ref = closes[Math.max(0, closes.length - 22)];
+    return { dxy: last, chg30: ref ? (last / ref - 1) * 100 : null };
+  }
+  const YF = 'https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?range=3mo&interval=1d';
+  const fetchD = () => resolve('D', [
+    ['Yahoo (corsproxy.io)', async () => parseYahoo(await getJSON('https://corsproxy.io/?url=' + encodeURIComponent(YF)))],
+    ['Yahoo (allorigins)', async () => parseYahoo(await getJSON('https://api.allorigins.win/raw?url=' + encodeURIComponent(YF)))],
+    // DXY sintético con la fórmula oficial de ICE a partir de tipos de cambio públicos
+    ['DXY sintético (ER-API)', async () => {
+      const j = await getJSON('https://open.er-api.com/v6/latest/USD');
+      const r = j.rates;
+      const dxy = 50.14348112 * Math.pow(r.EUR, 0.576) * Math.pow(r.JPY, 0.136) * Math.pow(r.GBP, 0.119)
+        * Math.pow(r.CAD, 0.091) * Math.pow(r.SEK, 0.042) * Math.pow(r.CHF, 0.036);
+      if (!isFinite(dxy) || dxy < 60 || dxy > 160) throw new Error('fuera de rango');
+      return { dxy, chg30: null };
+    }],
+  ]);
+
+  const fetchI = (price) => resolve('I', [
+    ['Binance Futures', async () => {
+      const now = await getJSON('https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT');
+      const oi = +now.openInterest;
+      let chg30 = 0;
+      try {
+        const h = await getJSON('https://fapi.binance.com/futures/data/openInterestHist?symbol=BTCUSDT&period=1d&limit=30');
+        const first = +h[0].sumOpenInterest;
+        if (first) chg30 = (oi / first - 1) * 100;
+      } catch {}
+      return { oi, oiUsd: oi * (price || 0), chg30 };
+    }],
+  ]);
+
+  function parseLlama(j) {
+    const assets = j.peggedAssets || [];
+    let now = 0, w = 0, m = 0;
+    for (const a of assets) {
+      now += a.circulating?.peggedUSD || 0;
+      w += a.circulatingPrevWeek?.peggedUSD || 0;
+      m += a.circulatingPrevMonth?.peggedUSD || 0;
+    }
+    if (!now) throw new Error('sin datos');
+    return { total: now, chg7: w ? (now / w - 1) * 100 : 0, chg30: m ? (now / m - 1) * 100 : 0 };
+  }
+  const fetchL = () => resolve('L', [
+    ['DeFiLlama', async () => parseLlama(await getJSON('https://api.llama.fi/stablecoins', 12000))],
+    ['DeFiLlama', async () => parseLlama(await getJSON('https://stablecoins.llama.fi/stablecoins', 12000))],
+  ]);
+
+  /* ---------- sincronización ---------- */
+  async function sync() {
+    if (state.syncing) return;
+    state.syncing = true; setLive('syncing');
+    $('refreshBtn').disabled = true; $('refreshIcon').classList.add('spin');
+
+    const [closesRaw, tick, F, D, L] = await Promise.all([fetchKlines(), fetchTicker(), fetchF(), fetchD(), fetchL()]);
+    const closes = Array.isArray(closesRaw) ? closesRaw : [];
+    const price = (tick && tick.price) || closes[closes.length - 1] || 0;
+    if (closes.length && price) closes[closes.length - 1] = price;
+
+    const rsi = rsiWilder(closes);
+    const emaArr = emaSeries(closes, 200);
+    const ema = emaArr[emaArr.length - 1];
+    const R = rsi != null ? { rsi } : FALLBACK.R;
+    const E = ema && price ? { price, ema, dev: (price / ema - 1) * 100 } : FALLBACK.E;
+    // R y E heredan el estado de las velas
+    state.src.R = state.src.E = rsi != null ? state.src.K : 'fallback';
+    state.provider.R = state.provider.E = rsi != null ? state.provider.K + ' (cálculo)' : 'Valor estimado';
+    state.ms.R = state.ms.E = state.ms.K;
+
+    const I = await fetchI(price);
+    if (I.oi && price) I.oiUsd = I.oi * price;
+
+    state.data = { F, R, E, D, I, L };
+    state.price = price;
+    state.chg24 = tick && tick.price ? tick.chg24 : (closes.length > 1 ? (closes.at(-1) / closes.at(-2) - 1) * 100 : 0);
+    state.closes = closes; state.emaArr = emaArr;
+    saveCache(cache);
+
+    render();
+    state.syncing = false;
+    $('refreshBtn').disabled = false; $('refreshIcon').classList.remove('spin');
+    state.next = Date.now() + SYNC_MS;
+  }
+
+  /* ---------- render ---------- */
+  function scoreColor(s) { return s >= 8 ? 'var(--good)' : s >= 5 ? 'var(--warn)' : 'var(--bad)'; }
+
+  function buildCards() {
+    $('cards').innerHTML = Object.keys(META).map(k => `
+      <article class="tile p-4 flex flex-col items-center text-center gap-1.5" tabindex="0" id="card-${k}">
+        <div class="flex items-center justify-between w-full">
+          <span class="src-badge" id="badge-${k}">—</span>
+          <span class="text-[10px] dim num">peso ${META[k].w}%</span>
+        </div>
+        <div class="letter" style="color:${META[k].color};text-shadow:0 0 14px ${META[k].color}">${k}</div>
+        <div class="text-[11px] font-semibold tracking-[.1em] uppercase muted">${META[k].name}</div>
+        <div class="num text-lg font-bold" id="score-${k}">—/10</div>
+        <div class="bar-track w-full"><div class="bar-fill" id="bar-${k}" style="width:0%"></div></div>
+        <div class="text-[11.5px] muted num leading-snug min-h-[2.4em] flex items-center" id="det-${k}">—</div>
+      </article>`).join('');
+  }
+
+  const ZONES = [
+    { min: 80, label: 'ACUMULACIÓN FUERTE', color: 'var(--good)', desc: 'Miedo, sobreventa y descuento macro coinciden. Históricamente zona de compra escalonada de largo plazo.' },
+    { min: 65, label: 'ACUMULACIÓN', color: '#8fe35a', desc: 'La mayoría de variables favorece acumular. Conviene entrar por partes y respetar la gestión de riesgo.' },
+    { min: 45, label: 'NEUTRAL', color: 'var(--warn)', desc: 'Señales mixtas. Sin ventaja clara: mantener posiciones y esperar confirmación.' },
+    { min: 30, label: 'DISTRIBUCIÓN', color: '#ff8a3d', desc: 'Codicia y apalancamiento al alza. Zona para tomar ganancias parciales y ajustar stops.' },
+    { min: 0, label: 'TECHO / EUFORIA', color: 'var(--bad)', desc: 'Euforia, sobrecompra y precio extendido sobre la EMA 200. Riesgo alto de corrección.' },
+  ];
+
+  function render() {
+    const scores = {};
+    let total = 0;
+    for (const k of Object.keys(META)) {
+      const d = state.data[k];
+      const s = clamp(SCORE[k](d), 0, 10);
+      scores[k] = s;
+      total += s * META[k].w / 10;
+      $('score-' + k).textContent = s + '/10';
+      $('score-' + k).style.color = scoreColor(s);
+      const bar = $('bar-' + k);
+      bar.style.width = (s * 10) + '%'; bar.style.backgroundColor = scoreColor(s);
+      $('det-' + k).textContent = DETAIL[k](d);
+      const b = $('badge-' + k), src = state.src[k];
+      b.className = 'src-badge src-' + src;
+      b.textContent = src === 'live' ? 'Vivo' : src === 'cache' ? 'Caché' : 'Respaldo';
+      const card = $('card-' + k); card.classList.remove('flash'); void card.offsetWidth; card.classList.add('flash');
+    }
+    const idx = Math.round(total);
+    const z = ZONES.find(z => idx >= z.min);
+
+    // Medidor
+    const num = $('idxNum');
+    num.textContent = idx; num.style.color = z.color; num.style.setProperty('--zone', z.color);
+    $('arcFill').setAttribute('stroke-dasharray', `${idx} 100`);
+    const ang = Math.PI * (1 - idx / 100);
+    $('arcKnob').setAttribute('cx', (120 + 100 * Math.cos(ang)).toFixed(1));
+    $('arcKnob').setAttribute('cy', (125 - 100 * Math.sin(ang)).toFixed(1));
+    $('zoneLbl').style.color = z.color; $('zoneText').textContent = z.label;
+    $('zoneDesc').textContent = z.desc;
+    $('scaleMarker').style.left = idx + '%';
+    $('signalTime').textContent = new Date().toLocaleString('es-EC', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+    // Cabecera
+    $('price').textContent = state.price ? '₿ ' + fmtUsd(state.price) : '₿ sin precio';
+    const c = $('chg24'), up = state.chg24 >= 0;
+    c.textContent = sign(state.chg24, 2);
+    c.style.color = up ? 'var(--good)' : 'var(--bad)';
+    c.style.background = `color-mix(in srgb, ${up ? 'var(--good)' : 'var(--bad)'} 12%, transparent)`;
+    $('lastUpd').textContent = new Date().toLocaleTimeString('es-EC', { hour12: false });
+
+    // Estado global
+    const keys = ['F', 'R', 'E', 'D', 'I', 'L'];
+    const live = keys.filter(k => state.src[k] === 'live').length;
+    $('liveCount').textContent = live + '/6';
+    setLive(live >= 5 ? 'live' : live >= 1 ? 'partial' : 'offline');
+    $('sandboxNote').hidden = live > 0;
+
+    renderSources();
+    renderChart();
+  }
+
+  function setLive(mode) {
+    const el = $('liveState'), dot = el.querySelector('.dot');
+    const M = {
+      syncing: ['var(--warn)', 'Sincronizando…', false],
+      live: ['var(--good)', 'En vivo', true],
+      partial: ['var(--warn)', 'En vivo · parcial', true],
+      offline: ['var(--bad)', 'Sin conexión · respaldo', false],
+    }[mode];
+    el.style.color = M[0];
+    el.style.background = `color-mix(in srgb, ${M[0]} 12%, transparent)`;
+    $('liveText').textContent = M[1];
+    dot.classList.toggle('pulse', M[2]);
+  }
+
+  function renderSources() {
+    const rows = [['F', 'F'], ['R', 'R'], ['E', 'E'], ['D', 'D'], ['I', 'I'], ['L', 'L'], ['P', 'Precio']];
+    $('srcBody').innerHTML = rows.map(([k, lbl]) => {
+      const s = state.src[k] || 'fallback';
+      const txt = s === 'live' ? 'Vivo' : s === 'cache' ? 'Caché' : 'Respaldo';
+      const color = META[k] ? META[k].color : 'var(--btc)';
+      return `<tr><td class="num font-bold" style="color:${color}">${lbl}</td><td class="muted">${state.provider[k] || '—'}</td><td><span class="src-badge src-${s}">${txt}</span></td><td class="num text-right dim">${state.ms[k] ?? '—'}</td></tr>`;
+    }).join('');
+  }
+
+  function renderChart() {
+    const svg = $('chart');
+    const N = 180;
+    const c = state.closes.slice(-N), e = state.emaArr.slice(-N);
+    if (c.length < 10) {
+      svg.innerHTML = `<text x="400" y="150" text-anchor="middle" fill="#4e5a6a" font-size="16" font-family="IBM Plex Sans, sans-serif">Sin velas diarias disponibles todavía</text>`;
+      $('chartMax').textContent = ''; $('chartMin').textContent = '';
+      return;
+    }
+    const all = c.concat(e.filter(v => v != null));
+    const max = Math.max(...all), min = Math.min(...all), pad = (max - min) * 0.08;
+    const hi = max + pad, lo = min - pad;
+    const X = i => (i / (c.length - 1)) * 800;
+    const Y = v => 300 - ((v - lo) / (hi - lo)) * 300;
+    const line = arr => arr.map((v, i) => v == null ? null : `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).filter(Boolean).join(' ');
+    const area = `0,300 ${line(c)} 800,300`;
+    const grid = [0.25, 0.5, 0.75].map(f => `<line x1="0" x2="800" y1="${300 * f}" y2="${300 * f}" stroke="#1c2430" stroke-width="1" vector-effect="non-scaling-stroke"/>`).join('');
+    svg.innerHTML = `
+      <defs><linearGradient id="ag" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#f7931a" stop-opacity=".25"/><stop offset="1" stop-color="#f7931a" stop-opacity="0"/></linearGradient></defs>
+      ${grid}
+      <polygon points="${area}" fill="url(#ag)"/>
+      <polyline points="${line(e)}" fill="none" stroke="#2fd3ff" stroke-width="2" stroke-dasharray="6 4" vector-effect="non-scaling-stroke"/>
+      <polyline points="${line(c)}" fill="none" stroke="#f7931a" stroke-width="2.2" vector-effect="non-scaling-stroke"/>`;
+    $('chartMax').textContent = fmtUsd(hi);
+    $('chartMin').textContent = fmtUsd(lo);
+  }
+
+  function updateSession() {
+    const h = new Date().getUTCHours();
+    const s = h >= 13 && h < 21 ? (h < 16 ? 'Londres + NY' : 'Nueva York') : h >= 7 && h < 13 ? 'Londres' : 'Asia';
+    $('session').textContent = '🏛 Sesión ' + s;
+  }
+
+  /* ---------- arranque ---------- */
+  buildCards();
+  // Primer pintado inmediato con caché/respaldo para que nada aparezca vacío
+  for (const k of ['F', 'D', 'I', 'L']) {
+    state.data[k] = cache[k] ? cache[k].v : FALLBACK[k];
+    state.src[k] = cache[k] ? 'cache' : 'fallback';
+    state.provider[k] = cache[k] ? cache[k].provider : 'Valor estimado';
+  }
+  state.data.R = FALLBACK.R; state.data.E = FALLBACK.E;
+  if (cache.K && Array.isArray(cache.K.v)) {
+    const cl = cache.K.v, r = rsiWilder(cl), ea = emaSeries(cl), em = ea.at(-1);
+    if (r != null) state.data.R = { rsi: r };
+    if (em) state.data.E = { price: cl.at(-1), ema: em, dev: (cl.at(-1) / em - 1) * 100 };
+    state.closes = cl; state.emaArr = ea;
+    state.src.R = state.src.E = 'cache'; state.provider.R = state.provider.E = cache.K.provider + ' (cálculo)';
+  } else { state.src.R = state.src.E = 'fallback'; state.provider.R = state.provider.E = 'Valor estimado'; }
+  state.price = cache.P ? cache.P.v.price : 0; state.chg24 = cache.P ? cache.P.v.chg24 : 0;
+  state.src.P = cache.P ? 'cache' : 'fallback'; state.provider.P = cache.P ? cache.P.provider : 'Valor estimado';
+  render(); setLive('syncing');
+  updateSession();
+
+  $('refreshBtn').addEventListener('click', () => sync());
+  setInterval(() => {
+    const s = Math.max(0, Math.ceil((state.next - Date.now()) / 1000));
+    $('countdown').textContent = state.syncing ? '…' : s;
+    if (!state.syncing && s === 0) sync();
+    updateSession();
+  }, 1000);
+  sync();
+})();
+</script>
